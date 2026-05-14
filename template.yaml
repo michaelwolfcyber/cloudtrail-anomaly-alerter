@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  CloudTrail Anomaly Alerter — detects suspicious API activity and sends
+  alerts via SNS and CloudWatch Logs.
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Description: Email address to receive anomaly alerts
+  ExpectedRegions:
+    Type: String
+    Default: "us-east-1,us-west-2"
+    Description: Comma-separated list of regions where activity is expected
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        SNS_TOPIC_ARN: !Ref AlertTopic
+        EXPECTED_REGIONS: !Ref ExpectedRegions
+
+Resources:
+
+  # --- S3 bucket for CloudTrail logs ---
+  CloudTrailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "cloudtrail-anomaly-alerter-${AWS::AccountId}-${AWS::Region}"
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldLogs
+            Status: Enabled
+            ExpirationInDays: 90
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: "s3:ObjectCreated:*"
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: ".json.gz"
+            Function: !GetAtt AnomalyAlerterFunction.Arn
+
+  CloudTrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CloudTrailBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt CloudTrailBucket.Arn
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "${CloudTrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+
+  # --- CloudTrail ---
+  AccountTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: CloudTrailBucketPolicy
+    Properties:
+      TrailName: cloudtrail-anomaly-alerter-trail
+      S3BucketName: !Ref CloudTrailBucket
+      IsLogging: true
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      EnableLogFileValidation: true
+
+  # --- SNS topic for alerts ---
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: cloudtrail-anomaly-alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  # --- Lambda function ---
+  AnomalyAlerterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: cloudtrail-anomaly-alerter
+      CodeUri: lambda/
+      Handler: handler.lambda_handler
+      Description: Analyzes CloudTrail logs for suspicious activity
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Sub "cloudtrail-anomaly-alerter-${AWS::AccountId}-${AWS::Region}"
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt AlertTopic.TopicName
+      LoggingConfig:
+        LogFormat: JSON
+        ApplicationLogLevel: INFO
+        SystemLogLevel: WARN
+
+  # Permission for S3 to invoke Lambda
+  S3InvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AnomalyAlerterFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt CloudTrailBucket.Arn
+      SourceAccount: !Ref AWS::AccountId
+
+  # --- CloudWatch dashboard ---
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: CloudTrail-Anomaly-Alerter
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "properties": {
+                "title": "Lambda Invocations",
+                "metrics": [["AWS/Lambda","Invocations","FunctionName","cloudtrail-anomaly-alerter"]],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "title": "Lambda Errors",
+                "metrics": [["AWS/Lambda","Errors","FunctionName","cloudtrail-anomaly-alerter"]],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "log",
+              "properties": {
+                "title": "Recent Findings",
+                "query": "SOURCE '/aws/lambda/cloudtrail-anomaly-alerter' | filter @message like /FINDING/ | sort @timestamp desc | limit 20",
+                "region": "${AWS::Region}",
+                "view": "table"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  AnomalyAlerterFunction:
+    Description: Lambda function ARN
+    Value: !GetAtt AnomalyAlerterFunction.Arn
+
+  AlertTopicArn:
+    Description: SNS topic ARN for anomaly alerts
+    Value: !Ref AlertTopic
+
+  CloudTrailBucketName:
+    Description: S3 bucket receiving CloudTrail logs
+    Value: !Ref CloudTrailBucket
+
+  DashboardUrl:
+    Description: CloudWatch dashboard URL
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home#dashboards:name=CloudTrail-Anomaly-Alerter"

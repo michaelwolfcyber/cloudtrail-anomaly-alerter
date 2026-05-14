@@ -1,0 +1,7 @@
+[default.deploy.parameters]
+stack_name = "cloudtrail-anomaly-alerter"
+resolve_s3 = true
+s3_prefix = "cloudtrail-anomaly-alerter"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
