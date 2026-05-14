@@ -319,13 +319,6 @@ sam delete
 
 ---
 
-## Related Projects
-
-- [lobo-homelab](https://github.com/mikelobocyber/lobo-homelab) — self-hosted homelab: Proxmox, Wazuh SIEM, Nextcloud
-- [cybersecurity-certifications](https://github.com/mikelobocyber/cybersecurity-certifications) — cert roadmap and study notes (Security+, CySA+, OSCP)
-
----
-
 ## License
 
 MIT
