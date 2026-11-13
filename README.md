@@ -74,7 +74,7 @@ sam --version
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/mikelobocyber/cloudtrail-anomaly-alerter
+git clone https://github.com/michaelwolfcyber/cloudtrail-anomaly-alerter.git
 cd cloudtrail-anomaly-alerter
 ```
 
